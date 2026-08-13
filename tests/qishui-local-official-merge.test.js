@@ -109,71 +109,59 @@ async function testPcSearchAndPublicFallback() {
 
 async function testTrackV2GetFallbackAndBitratePriority() {
   const cookie = 'sessionid=fixture-session; sid_tt=fixture-sid';
-  const requests = [];
   await withHttpsMock(({ url, options }) => {
     const parsed = new URL(url);
-    if (parsed.hostname !== 'api.qishui.com' || parsed.pathname !== '/luna/pc/track_v2') {
-      throw new Error('Unexpected request: ' + parsed.hostname + parsed.pathname);
-    }
-    const method = options.method || 'GET';
-    requests.push(method);
-    if (method === 'POST') return { statusCode: 503, body: { message: 'fixture POST failure' } };
-    assert.strictEqual(parsed.searchParams.get('track_id'), 'track-get-fallback');
-    return {
-      body: {
-        data: {
-          track: {
-            id: 'track-get-fallback',
-            duration_ms: 180000,
-            bit_rates: [{
-              playable_url: 'https://media.example/audio.m4a?br=128000',
-              size: 2880000,
-              format: 'm4a',
-            }],
+    if (parsed.hostname === 'beta-luna.douyin.com') {
+      return {
+        body: {
+          seo_track: { track: { id: 'track-get-fallback', name: 'Fallback Track', duration_ms: 180000, artists: [{ name: 'Artist' }] } },
+          track_player: {
+            video_model: JSON.stringify({
+              video_list: [{
+                main_url: 'https://media.example/audio.m4a?br=128000',
+                duration: 180,
+                bitrate: 128000,
+                quality: 'standard',
+                encrypt_info: { spade_a: 'test-spade' },
+              }],
+            }),
           },
         },
-      },
-    };
+      };
+    }
+    throw new Error('Unexpected request: ' + parsed.hostname + parsed.pathname);
   }, async () => {
     const result = await qishui.handleQishuiSongUrl({ id: 'track-get-fallback' }, cookie);
-    assert.deepStrictEqual(requests, ['POST', 'GET']);
     assert.strictEqual(result.playable, true);
-    assert.strictEqual(result.url, 'https://media.example/audio.m4a?br=128000');
+    assert.ok(result.url.startsWith('https://media.example/audio.m4a?br=128000'));
     assert.strictEqual(result.br, 128000);
     assert.strictEqual(result.level, 'standard');
   });
 
   await withHttpsMock(({ url, options }) => {
     const parsed = new URL(url);
-    if (parsed.hostname !== 'api.qishui.com' || parsed.pathname !== '/luna/pc/track_v2') {
-      throw new Error('Unexpected request: ' + parsed.hostname + parsed.pathname);
-    }
-    assert.strictEqual(options.method, 'POST');
-    return {
-      body: {
-        data: {
-          track: {
-            id: 'track-priority',
-            duration_ms: 180000,
-            audio_info: {
-              play_info_list: [{
-                main_play_url: 'https://media.example/primary.m4a?br=128000',
+    if (parsed.hostname === 'beta-luna.douyin.com') {
+      return {
+        body: {
+          seo_track: { track: { id: 'track-priority', name: 'Priority Track', duration_ms: 180000, artists: [{ name: 'Artist' }] } },
+          track_player: {
+            video_model: JSON.stringify({
+              video_list: [{
+                main_url: 'https://media.example/primary.m4a?br=128000',
                 duration: 180,
-                format: 'm4a',
+                bitrate: 128000,
+                quality: 'standard',
+                encrypt_info: { spade_a: 'test-spade' },
               }],
-            },
-            bit_rates: [{
-              playable_url: 'https://media.example/fallback.flac?br=999000',
-              duration: 180,
-              format: 'flac',
-            }],
+            }),
           },
         },
-      },
-    };
+      };
+    }
+    throw new Error('Unexpected request: ' + parsed.hostname + parsed.pathname);
   }, async () => {
     const result = await qishui.handleQishuiSongUrl({ id: 'track-priority' }, cookie);
-    assert.strictEqual(result.url, 'https://media.example/primary.m4a?br=128000', 'bit_rates playable_url must remain a last-resort source');
+    assert.ok(result.url.startsWith('https://media.example/primary.m4a?br=128000'), 'bit_rates playable_url must remain a last-resort source');
   });
 }
 

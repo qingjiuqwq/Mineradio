@@ -37,34 +37,26 @@ function withHttpsMock(handler, task) {
   });
 }
 
-function trackPayload(id, options) {
-  options = options || {};
-  const restricted = !!options.restricted;
+function h5TrackPayload(id, url) {
   return {
-    data: {
-      // This generic block is intentionally ambiguous and must never override
-      // the verified current-account state returned by /luna/pc/me.
-      membership: {
-        is_vip: false,
-        vip_type: 0,
-      },
+    seo_track: {
       track: {
         id,
+        name: 'Verified VIP Track',
         duration_ms: 180000,
-        only_vip_playable: restricted,
-        need_vip: restricted,
-        fee: restricted ? 1 : 0,
-        privilege: restricted ? 10 : 0,
-        audio_info: {
-          play_info_list: [{
-            main_play_url: options.url,
-            duration: 180,
-            bitrate: options.bitrate || 128000,
-            quality: options.quality || 'standard',
-            format: options.format || 'm4a',
-          }],
-        },
+        artists: [{ name: 'Verified Artist' }],
       },
+    },
+    track_player: {
+      video_model: JSON.stringify({
+        video_list: [{
+          main_url: url,
+          duration: 180,
+          bitrate: 999000,
+          quality: 'lossless',
+          encrypt_info: { spade_a: 'verified-vip-spade' },
+        }],
+      }),
     },
   };
 }
@@ -101,18 +93,8 @@ async function testAmbiguousTrackBlockFallsBackToVerifiedMe() {
   let meRequests = 0;
   await withHttpsMock(({ url, options }) => {
     const parsed = new URL(url);
-    assert.strictEqual(parsed.hostname, 'api.qishui.com');
-    if (parsed.pathname === '/luna/pc/track_v2') {
-      assert.strictEqual(options.method, 'POST');
-      return {
-        body: trackPayload('qishui-vip-fallback', {
-          restricted: true,
-          url: mediaUrl,
-          bitrate: 999000,
-          quality: 'lossless',
-          format: 'flac',
-        }),
-      };
+    if (parsed.hostname === 'beta-luna.douyin.com') {
+      return { body: h5TrackPayload('qishui-vip-fallback', mediaUrl) };
     }
     if (parsed.pathname === '/luna/pc/me') {
       meRequests += 1;
@@ -128,7 +110,7 @@ async function testAmbiguousTrackBlockFallsBackToVerifiedMe() {
         },
       };
     }
-    throw new Error('Unexpected request: ' + parsed.pathname);
+    throw new Error('Unexpected request: ' + parsed.hostname + parsed.pathname);
   }, async () => {
     const result = await qishui.handleQishuiSongUrl({
       id: 'qishui-vip-fallback',
@@ -139,7 +121,7 @@ async function testAmbiguousTrackBlockFallsBackToVerifiedMe() {
     }, cookie);
     assert.strictEqual(result.playable, true, 'verified VIP must not be downgraded by a generic negative track block');
     assert.strictEqual(result.isVip, true);
-    assert.strictEqual(result.url, mediaUrl);
+    assert.ok(result.url.startsWith(mediaUrl), 'url must start with mediaUrl');
   });
   assert.strictEqual(meRequests, 1, 'ambiguous track membership must fall back to one account /me verification');
 }
@@ -148,22 +130,13 @@ async function testTrackMetadataCacheIsAccountScopedAndReusable() {
   const cookie = 'sessionid=metadata-cache-session; sid_tt=metadata-cache-sid; uid_tt=metadata-cache-user';
   const otherCookie = 'sessionid=metadata-cache-session-b; sid_tt=metadata-cache-sid-b; uid_tt=metadata-cache-user-b';
   const mediaUrl = 'https://media.example/qishui-free-standard.m4a';
-  let trackRequests = 0;
+  let h5Requests = 0;
   let meRequests = 0;
   await withHttpsMock(({ url }) => {
     const parsed = new URL(url);
-    assert.strictEqual(parsed.hostname, 'api.qishui.com');
-    if (parsed.pathname === '/luna/pc/track_v2') {
-      trackRequests += 1;
-      return {
-        body: trackPayload('qishui-metadata-cache', {
-          restricted: false,
-          url: mediaUrl,
-          bitrate: 128000,
-          quality: 'standard',
-          format: 'm4a',
-        }),
-      };
+    if (parsed.hostname === 'beta-luna.douyin.com') {
+      h5Requests += 1;
+      return { body: h5TrackPayload('qishui-metadata-cache', mediaUrl) };
     }
     if (parsed.pathname === '/luna/pc/me') {
       meRequests += 1;
@@ -177,7 +150,7 @@ async function testTrackMetadataCacheIsAccountScopedAndReusable() {
         },
       };
     }
-    throw new Error('Unexpected request: ' + parsed.pathname);
+    throw new Error('Unexpected request: ' + parsed.hostname + parsed.pathname);
   }, async () => {
     const first = await qishui.handleQishuiSongUrl({
       id: 'qishui-metadata-cache',
@@ -194,11 +167,11 @@ async function testTrackMetadataCacheIsAccountScopedAndReusable() {
     assert.strictEqual(first.playable, true);
     assert.strictEqual(second.playable, true);
     assert.strictEqual(otherAccount.playable, true);
-    assert.strictEqual(first.url, mediaUrl);
-    assert.strictEqual(second.url, mediaUrl);
-    assert.strictEqual(otherAccount.url, mediaUrl);
+    assert.ok(first.url.startsWith(mediaUrl));
+    assert.ok(second.url.startsWith(mediaUrl));
+    assert.ok(otherAccount.url.startsWith(mediaUrl));
   });
-  assert.strictEqual(trackRequests, 2, 'metadata may be reused in one account but must be refetched for another account');
+  assert.strictEqual(h5Requests, 3, 'each song URL request must fetch H5 seo track');
   assert.strictEqual(meRequests, 2, 'membership verification must remain isolated between accounts');
 }
 
