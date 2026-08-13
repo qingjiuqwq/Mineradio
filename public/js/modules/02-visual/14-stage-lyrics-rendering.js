@@ -1517,6 +1517,10 @@ function stageLyricPlaybackSeconds() {
   if (preview != null && isFinite(Number(preview))) return Math.max(0, Number(preview));
   var restoreSeconds = stageLyricRestoreWarmupSeconds();
   if (restoreSeconds != null) return restoreSeconds;
+  if (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled() && typeof systemMediaDisplaySeconds === 'function') {
+    return Math.max(0, Number(systemMediaDisplaySeconds(typeof systemMediaCurrentSong === 'function' ? systemMediaCurrentSong() : null)) || 0);
+  }
+  if (typeof getPlaybackCurrentSeconds === 'function') return Math.max(0, Number(getPlaybackCurrentSeconds()) || 0);
   return audio && isFinite(Number(audio.currentTime)) ? Math.max(0, Number(audio.currentTime)) : 0;
 }
 function stageLyricProgressSeekVisualReady(seconds) {
@@ -3087,8 +3091,9 @@ function tickLyricsParticles() {
   }
   var previewingSeek = stageLyricProgressPreviewActive();
   var holdLyricsOnPause = !fx || fx.lyricPauseHold !== false;
+  var externalSystemMedia = typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled() && typeof systemMediaCurrentSong === 'function' && !!systemMediaCurrentSong();
   var pausedWithTrack = !!(holdLyricsOnPause && audio && audio.src && audio.paused && !audio.ended && lyricsLines && lyricsLines.length);
-  if (!audio || !lyricsLines.length || (audio && audio.ended)) {
+  if ((!audio && !externalSystemMedia) || !lyricsLines.length || (audio && audio.ended && !externalSystemMedia)) {
     retireCurrentStageLyricForIdle();
     return;
   }

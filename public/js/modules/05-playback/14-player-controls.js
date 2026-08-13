@@ -537,6 +537,17 @@ async function playAudio(opts) {
   return attemptAudioPlay({ manual: !!opts.manual, silent: !!opts.silent || !!opts.startupAutoplay || !!opts.trackSwitch, startupAutoplay: !!opts.startupAutoplay, fade: opts.fade, preserveGain: !!opts.preserveGain, trackSwitch: !!opts.trackSwitch, resumeRecovery: !!opts.resumeRecovery, expectedMedia: opts.expectedMedia || audio, expectedToken: opts.expectedToken == null ? trackSwitchToken : opts.expectedToken });
 }
 async function togglePlay() {
+  if (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled()) {
+    if (playToggleBusy) return;
+    playToggleBusy = true;
+    try {
+      await systemMediaControl('playPause');
+    } finally {
+      playToggleBusy = false;
+      forcePlaybackControlsInteractive();
+    }
+    return;
+  }
   if (playToggleBusy) return;
   playToggleBusy = true;
   try {
@@ -626,6 +637,10 @@ function reorderQueueForShufflePlaybackOrder(startIdx, opts) {
   return currentIdx;
 }
 function nextTrack(userInitiated) {
+  if (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled()) {
+    systemMediaControl('next').finally(forcePlaybackControlsInteractive);
+    return;
+  }
   if (!playQueue.length) return;
   playToggleBusy = false;
   forcePlaybackControlsInteractive();
@@ -650,6 +665,10 @@ function nextTrack(userInitiated) {
   Promise.resolve(playQueueAt(currentIdx, opts)).finally(forcePlaybackControlsInteractive);
 }
 function prevTrack(userInitiated) {
+  if (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled()) {
+    systemMediaControl('previous').finally(forcePlaybackControlsInteractive);
+    return;
+  }
   if (!playQueue.length) return;
   playToggleBusy = false;
   forcePlaybackControlsInteractive();

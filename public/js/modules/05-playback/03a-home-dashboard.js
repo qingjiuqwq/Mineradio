@@ -434,6 +434,19 @@ function homeDashboardCurrentSong() {
   }
 }
 
+function homeDashboardSystemMediaSummary() {
+  if (typeof systemMediaCurrentItem !== 'function') return null;
+  var item = systemMediaCurrentItem();
+  if (!item) return null;
+  return {
+    name: item.name || item.title || '',
+    artist: item.artist || item.sourceAppId || '',
+    source: item.sourceAppId || 'system-media',
+    cover: '',
+    type: 'external',
+  };
+}
+
 function homeDashboardSubtitle(song) {
   if (!song) return '';
   try {
@@ -536,8 +549,9 @@ function renderHomeDashboardQuickCards() {
   var summary = typeof homeListenSummary === 'function' ? homeListenSummary() : {};
   var recent = summary && summary.recent || null;
   var current = homeDashboardCurrentSong();
+  var systemMedia = !current && !recent ? homeDashboardSystemMediaSummary() : null;
   var daily = homeDiscoverState && homeDiscoverState.songs && homeDiscoverState.songs[0] || null;
-  var continueItem = current || recent;
+  var continueItem = current || recent || systemMedia;
   var localSongs = homeDashboardLocalSongs();
   var localCount = localSongs.length;
   var accountPlaylistCount = homeDiscoverState && Array.isArray(homeDiscoverState.playlists) ? homeDiscoverState.playlists.length : 0;
@@ -615,6 +629,16 @@ function resumeHomeDashboardPlayback() {
   var recent = typeof homeListenSummary === 'function' ? homeListenSummary().recent : null;
   if (recent && typeof playHomeRecent === 'function') {
     Promise.resolve(playHomeRecent(recent)).catch(function (error) { console.warn('[HomeDashboardRecent]', error); });
+    return;
+  }
+  if (typeof searchSystemCurrentMedia === 'function') {
+    Promise.resolve(searchSystemCurrentMedia({ mode: 'song' })).then(function (result) {
+      if (result && result.ok) return;
+      if (typeof playHomeDaily === 'function') playHomeDaily();
+    }).catch(function (error) {
+      console.warn('[HomeDashboardSystemMedia]', error);
+      if (typeof playHomeDaily === 'function') playHomeDaily();
+    });
     return;
   }
   if (typeof playHomeDaily === 'function') playHomeDaily();

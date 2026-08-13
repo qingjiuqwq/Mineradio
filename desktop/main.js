@@ -14,6 +14,7 @@ const {
   LocalMusicLibrary,
   registerLocalMusicScheme,
 } = require('./local-music-library');
+const { readSystemMediaSession } = require('./system-media-session');
 const { WallpaperEngineRuntime } = require('./wallpaper-engine-runtime');
 const { FullDesktopModeRuntime } = require('./full-desktop-mode-runtime');
 const {
@@ -3878,6 +3879,16 @@ ipcMain.handle('mineradio-memory-get-snapshot', async () => {
   } catch (e) {
     return { ok: false, error: e.message || 'MEMORY_SNAPSHOT_FAILED', snapshot: systemMemory.getMemorySnapshot(), auto: memoryAutoState };
   }
+});
+
+ipcMain.handle('mineradio-system-media-current', async (_event, payload = {}) => {
+  const action = String(payload && payload.action || 'snapshot');
+  const allowedAction = /^(snapshot|playPause|play|pause|next|previous|seek)$/.test(action) ? action : 'snapshot';
+  return readSystemMediaSession({
+    timeoutMs: payload && payload.timeoutMs,
+    action: allowedAction,
+    seekMs: payload && payload.seekMs,
+  });
 });
 
 ipcMain.handle('mineradio-memory-configure-auto', async (_event, payload = {}) => {

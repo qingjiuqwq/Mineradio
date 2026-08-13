@@ -24,6 +24,7 @@ const QISHUI_WEB_API_BASES = (process.env.QISHUI_WEB_API_BASES || 'https://api5-
   .split(',')
   .map(item => item.trim().replace(/\/+$/, ''))
   .filter(Boolean);
+const QISHUI_LUNA_API_BASE = (process.env.QISHUI_LUNA_API_BASE || 'https://beta-luna.douyin.com').replace(/\/+$/, '');
 const QISHUI_WEB_PC_API_BASE = (process.env.QISHUI_WEB_PC_API_BASE || 'https://api.qishui.com').replace(/\/+$/, '');
 const QISHUI_PUBLIC_HEADERS = {
   'Accept': 'application/json,text/plain,*/*',
@@ -1689,14 +1690,19 @@ async function qishuiWebRequestJson(apiPath, params, cookieText, opts) {
   opts = opts || {};
   const bases = Array.isArray(opts.bases) && opts.bases.length ? opts.bases : QISHUI_WEB_API_BASES;
   let lastErr = null;
+  const method = normalizeText(opts.method || '').toUpperCase() || 'GET';
+  const body = opts.body !== undefined
+    ? (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body || {}))
+    : null;
   for (const base of bases) {
     const target = /^https?:\/\//i.test(apiPath) ? apiPath : (String(base || '').replace(/\/+$/, '') + apiPath);
     const targetUrl = urlWithParams(target, qishuiWebCommonParams(params, opts));
     try {
       const json = await requestJson(targetUrl, {
+        method,
         timeoutMs: opts.timeoutMs || 8000,
         headers: qishuiWebHeaders(cookieText, opts),
-      });
+      }, body);
       const err = qishuiPcStatusError(json, 'QISHUI_WEB_REQUEST_FAILED');
       if (err) throw err;
       return json;
@@ -2033,26 +2039,46 @@ async function fetchQishuiWebFeedSongs(cookieText, limit) {
   limit = Math.max(1, Math.min(50, Number(limit) || 8));
   const cacheKey = 'web-feed|' + qishuiCookieFingerprint(cookie) + '|' + limit;
   return qishuiFeedCache.wrap(cacheKey, 90 * 1000, async () => {
+    const feedBody = {
+      count: limit,
+      cursor: '0',
+      played_media: [],
+      common_params: {
+        trigger_name: 'mineradio_feed',
+        scene: 'feed',
+        source: 'mineradio',
+      },
+    };
     const candidates = [
-      { path: '/luna/feed/song-tab', params: { cursor: 0, cnt: limit, count: limit } },
-      { path: '/luna/pc/feed/song-tab', params: { cursor: 0, cnt: limit, count: limit } },
+      {
+        source: 'qishui-luna-feed-song-tab',
+        path: '/luna/feed/song-tab',
+        params: {},
+        opts: { method: 'POST', body: feedBody, timeoutMs: 8500, bases: [QISHUI_LUNA_API_BASE].concat(QISHUI_WEB_API_BASES) },
+      },
+      {
+        source: 'qishui-pc-feed-song-tab',
+        path: '/luna/pc/feed/song-tab',
+        params: qishuiPcAppParams(),
+        opts: { method: 'POST', body: feedBody, timeoutMs: 8500, bases: [QISHUI_WEB_PC_API_BASE], noDefaultParams: true, sessionOnly: true, pcApp: true },
+      },
+      {
+        source: 'qishui-discover-mix',
+        path: '/luna/discover/mix',
+        params: {},
+        opts: { method: 'POST', body: { count: limit, cursor: '0' }, timeoutMs: 8500 },
+      },
     ];
     let lastErr = null;
     for (const item of candidates) {
       try {
-        const json = await qishuiWebRequestJson(item.path, item.params, cookie, { timeoutMs: 8000 });
+        const json = await qishuiWebRequestJson(item.path, item.params, cookie, item.opts);
         const rawItems = extractQishuiMediaList(json);
         const songs = mapQishuiMediaList(rawItems, 'web-feed', { directPlayable: true }).slice(0, limit);
-        if (songs.length) return { provider: 'qishui', configured: true, webSession: true, songs, rawCount: rawItems.length };
+        if (songs.length) return { provider: 'qishui', configured: true, webSession: true, songs, rawCount: rawItems.length, source: item.source };
       } catch (err) {
         lastErr = err;
       }
-    }
-    try {
-      const fallback = await fetchQishuiWebLibraryFeedFallback(cookie, limit);
-      if (fallback && fallback.songs && fallback.songs.length) return fallback;
-    } catch (fallbackErr) {
-      lastErr = fallbackErr || lastErr;
     }
     return { provider: 'qishui', configured: true, webSession: true, songs: [], rawCount: 0, error: lastErr && lastErr.message || '' };
   });
@@ -2579,9 +2605,10 @@ async function handleQishuiSearch(keywords, limit, cookieText, offset) {
 async function fetchQishuiFeedSongs(limit, cookieText) {
   limit = Math.max(1, Math.min(50, Number(limit) || 8));
   const status = getQishuiStatus(cookieText);
-  if (!status.tokenConfigured && status.webSession) return fetchQishuiWebFeedSongs(cookieText, limit);
+  if (status.webSession) return fetchQishuiWebFeedSongs(cookieText, limit);
   if (!status.tokenConfigured) return { provider: 'qishui', configured: false, songs: [], error: 'QISHUI_TOKEN_REQUIRED', message: status.message };
-  const cacheKey = 'feed|' + limit;
+  const tokenFingerprint = crypto.createHash('sha1').update(qishuiAccessToken()).digest('hex').slice(0, 16);
+  const cacheKey = 'feed|' + tokenFingerprint + '|' + limit;
   return qishuiFeedCache.wrap(cacheKey, 90 * 1000, async () => {
     const json = await qishuiPost(QISHUI_FEED_SONG_TAB_PATH, {
       count: limit,
@@ -3283,8 +3310,6 @@ async function fetchQishuiPcTrackV2(trackId, cookieText) {
     }
   });
 }
-
-const QISHUI_LUNA_API_BASE = 'https://beta-luna.douyin.com';
 
 async function fetchQishuiH5SeoTrack(trackId, cookieText) {
   const url = urlWithParams(QISHUI_LUNA_API_BASE + '/luna/h5/seo_track', {

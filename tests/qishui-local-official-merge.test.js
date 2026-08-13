@@ -286,6 +286,50 @@ async function testLyricFallbackAndConversion() {
   });
 }
 
+async function testQishuiDailyFeedUsesRecommendationEndpoint() {
+  qishui._test.clearQishuiRuntimeCaches();
+  const cookie = 'sessionid=feed-session; sid_tt=feed-sid; uid_tt=feed-user; passport_csrf_token=feed-csrf';
+  const calls = [];
+  await withHttpsMock(({ url, options, body }) => {
+    const parsed = new URL(url);
+    calls.push({ path: parsed.pathname, method: options.method || 'GET', body });
+    if (parsed.hostname === 'beta-luna.douyin.com' && parsed.pathname === '/luna/feed/song-tab') {
+      assert.strictEqual(options.method, 'POST');
+      const payload = JSON.parse(body || '{}');
+      assert.strictEqual(payload.count, 6);
+      return {
+        body: {
+          data: {
+            items: [pcSearchTrack('daily-feed-1', 'Daily Feed One')],
+          },
+        },
+      };
+    }
+    throw new Error('Unexpected request: ' + parsed.hostname + parsed.pathname);
+  }, async () => {
+    const result = await qishui.handleQishuiFeed(6, cookie);
+    assert.strictEqual(result.source, 'qishui-luna-feed-song-tab');
+    assert.strictEqual(result.songs.length, 1);
+    assert.strictEqual(result.songs[0].id, 'daily-feed-1');
+  });
+  assert.deepStrictEqual(calls.map(item => item.path), ['/luna/feed/song-tab']);
+
+  await withHttpsMock(({ url }) => {
+    const parsed = new URL(url);
+    if (parsed.pathname === '/luna/pc/me/recently-played-media') {
+      throw new Error('daily feed must not fall back to recent play history');
+    }
+    if (parsed.pathname === '/luna/feed/song-tab' || parsed.pathname === '/luna/pc/feed/song-tab' || parsed.pathname === '/luna/discover/mix') {
+      return { body: { data: { items: [] } } };
+    }
+    throw new Error('Unexpected request: ' + parsed.hostname + parsed.pathname);
+  }, async () => {
+    const result = await qishui.handleQishuiFeed(6, 'sessionid=empty-feed-session; sid_tt=empty-feed-sid; uid_tt=empty-feed-user; passport_csrf_token=empty-feed-csrf');
+    assert.strictEqual(result.songs.length, 0);
+    assert.strictEqual(result.webSession, true);
+  });
+}
+
 async function testPcAccountWritesAndComments() {
   const cookie = 'sessionid=fixture-session; sid_tt=fixture-sid; uid_tt=fixture-user';
   await withHttpsMock(({ url }) => {
@@ -404,6 +448,7 @@ async function run() {
   await testTrackV2GetFallbackAndBitratePriority();
   await testH5FallbackOnlyMarksRealPreviewAsTrial();
   await testLyricFallbackAndConversion();
+  await testQishuiDailyFeedUsesRecommendationEndpoint();
   await testPcAccountWritesAndComments();
   console.log('[OK] Qishui local PC search, playback fallback, lyrics, collections, recent-play, and comments verified.');
 }

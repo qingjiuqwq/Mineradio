@@ -71,7 +71,7 @@ function currentRenderAdaptiveContext(now) {
   if (typeof isRenderInteractionActive === 'function' && isRenderInteractionActive(now)) {
     return { kind: 'interaction', tier: tier };
   }
-  var activePlayback = !!(playing && audio && !audio.paused);
+  var activePlayback = !!((playing && audio && !audio.paused) || (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled() && playing));
   return { kind: activePlayback ? 'playback' : 'idle', tier: tier };
 }
 function resolveAdaptiveRenderCadence(now, mode) {
@@ -230,7 +230,7 @@ function visibleMotionFollowVsync(now) {
   if (mode !== 'vsync') return false;
   if (typeof isProgressDragPreviewActive === 'function' && isProgressDragPreviewActive()) return true;
   if (mainLoopInteractionActive(now)) return true;
-  return !!(playing && audio && !audio.paused);
+  return !!((playing && audio && !audio.paused) || (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled() && playing));
 }
 function capMainLoopFpsToDisplay(fps) {
   var hz = (typeof estimatedDisplayRefreshHz === 'function') ? estimatedDisplayRefreshHz() : 60;
@@ -244,7 +244,7 @@ function capMainLoopFpsForBudget(fps, minFps) {
 function targetMainAudioFps(now) {
   if (isDeepBackgroundMode()) return 1;
   var scale = (typeof runtimeAudioAnalysisScale === 'function') ? runtimeAudioAnalysisScale() : 1;
-  if (playing && audio && !audio.paused) {
+  if ((playing && audio && !audio.paused) || (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled() && playing)) {
     var base = mainLoopInteractionActive(now) ? 72 : 54;
     return capMainLoopFpsToDisplay(Math.max(30, Math.round(base * scale)));
   }
@@ -264,21 +264,21 @@ function targetMainLyricsParticleFps(now) {
   if (!fx || fx.particleLyrics === false) return 12;
   if (visibleMotionFollowVsync(now)) return 0;
   if (mainLoopInteractionActive(now)) return capMainLoopFpsForBudget(120, 72);
-  return (playing && audio && !audio.paused) ? capMainLoopFpsForBudget(60, 48) : 24;
+  return ((playing && audio && !audio.paused) || (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled() && playing)) ? capMainLoopFpsForBudget(60, 48) : 24;
 }
 function targetMainStageLyricsFps(now) {
   if (isDeepBackgroundMode()) return 1;
   if (!fx || fx.particleLyrics === false) return 12;
   if (visibleMotionFollowVsync(now)) return 0;
   if (mainLoopInteractionActive(now)) return capMainLoopFpsForBudget(120, 72);
-  return (playing && audio && !audio.paused) ? capMainLoopFpsForBudget(60, 48) : 24;
+  return ((playing && audio && !audio.paused) || (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled() && playing)) ? capMainLoopFpsForBudget(60, 48) : 24;
 }
 function targetMainSkullParticleFps(now) {
   if (isDeepBackgroundMode()) return 1;
   if (!fx || fx.preset !== SKULL_PRESET_INDEX) return 10;
   if (visibleMotionFollowVsync(now)) return 0;
   if (mainLoopInteractionActive(now)) return capMainLoopFpsForBudget(120, 72);
-  return (playing && audio && !audio.paused) ? capMainLoopFpsForBudget(60, 45) : 24;
+  return ((playing && audio && !audio.paused) || (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled() && playing)) ? capMainLoopFpsForBudget(60, 45) : 24;
 }
 function targetMainHomeAudioFps(now) {
   if (isDeepBackgroundMode()) return 1;
@@ -345,6 +345,9 @@ function animate() {
   }
   pointerParallax.x += (pointerTarget.x - pointerParallax.x) * 0.040;
   pointerParallax.y += (pointerTarget.y - pointerParallax.y) * 0.040;
+  if (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled() && typeof systemMediaRenderProgress === 'function') {
+    systemMediaRenderProgress();
+  }
 
   // 频谱分析 — v7.1: 真正分离 kick 和人声
   // bin = sampleRate / fftSize = 44100/2048 ≈ 21.5Hz

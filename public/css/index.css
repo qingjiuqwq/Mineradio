@@ -5243,6 +5243,18 @@ body.home-controls-locked #bottom-bar {
   justify-content: center
 }
 
+#system-media-btn.active {
+  color: rgba(var(--fc-accent-rgb), .98);
+  box-shadow: 0 0 0 1px rgba(var(--fc-accent-rgb), .35), 0 0 18px rgba(var(--fc-accent-rgb), .20)
+}
+
+body.system-media-mode #quality-control,
+body.system-media-mode #heart-btn,
+body.system-media-mode #collect-btn {
+  opacity: .42;
+  pointer-events: none
+}
+
 .control-cluster.modes {
   grid-column: 3;
   justify-content: flex-end

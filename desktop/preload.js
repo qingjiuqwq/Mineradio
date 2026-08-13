@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   getState: () => ipcRenderer.invoke('desktop-window-get-state'),
   getGpuDiagnostics: () => ipcRenderer.invoke('mineradio-get-gpu-diagnostics'),
   getMemorySnapshot: () => ipcRenderer.invoke('mineradio-memory-get-snapshot'),
+  getSystemMediaSession: (payload) => ipcRenderer.invoke('mineradio-system-media-current', payload || {}),
   configureMemoryReduct: (payload) => ipcRenderer.invoke('mineradio-memory-configure-auto', payload || {}),
   trimAppMemory: (payload) => ipcRenderer.invoke('mineradio-memory-trim-app', payload || {}),
   purgeSystemMemory: (payload) => ipcRenderer.invoke('mineradio-memory-purge-system', payload || {}),

@@ -1,4 +1,8 @@
 function currentCoverSong() {
+  if (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled() && typeof systemMediaCurrentSong === 'function') {
+    var systemSong = systemMediaCurrentSong();
+    if (systemSong) return systemSong;
+  }
   if (currentIdx >= 0 && playQueue[currentIdx]) return playQueue[currentIdx];
   return currentLocalSong || null;
 }
@@ -763,6 +767,10 @@ function songCustomLyricKey(song) {
   return songCustomCoverKey(song);
 }
 function currentLyricSong() {
+  if (typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled() && typeof systemMediaCurrentSong === 'function') {
+    var systemSong = systemMediaCurrentSong();
+    if (systemSong) return systemSong;
+  }
   if (currentIdx >= 0 && playQueue[currentIdx]) return playQueue[currentIdx];
   return currentLocalSong || null;
 }
