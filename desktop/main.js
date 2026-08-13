@@ -175,6 +175,7 @@ const fullDesktopModeRuntime = new FullDesktopModeRuntime({
 });
 let wallpaperEngineCaptureSourceId = '';
 let wallpaperEngineCaptureGrant = null;
+let systemAudioCaptureGrant = null;
 let wallpaperEngineCaptureOperation = 0;
 let wallpaperEngineCapturePreparationOperation = 0;
 let wallpaperEngineGlassCaptureOperation = 0;
@@ -862,6 +863,38 @@ function isTrustedWallpaperEnginePreparationMediaPermission(webContents, origin,
   if (mediaType && !mediaType.includes('video')) return false;
   if (mediaTypes.length && !mediaTypes.every((value) => value.includes('video'))) return false;
   return isTrustedWallpaperEngineDisplayCapturePermission(webContents, origin, details);
+}
+
+function createSystemAudioCaptureGrant(sourceId) {
+  const id = String(sourceId || '');
+  if (!id) return null;
+  systemAudioCaptureGrant = {
+    sourceId: id,
+    expiresAt: Date.now() + 12000,
+    requestStarted: false,
+  };
+  return systemAudioCaptureGrant;
+}
+
+function getSystemAudioCaptureGrant() {
+  const grant = systemAudioCaptureGrant;
+  if (!grant) return null;
+  if (Date.now() > grant.expiresAt) {
+    systemAudioCaptureGrant = null;
+    return null;
+  }
+  return grant;
+}
+
+function isTrustedSystemAudioCapturePermission(webContents, origin, details) {
+  try {
+    if (!webContents || !mainWindow || mainWindow.isDestroyed() || webContents !== mainWindow.webContents || webContents.isDestroyed()) return false;
+    if (!isLocalAppUrl(origin)) return false;
+    if (details && details.isMainFrame === false) return false;
+    return !!getSystemAudioCaptureGrant();
+  } catch (_) {
+    return false;
+  }
 }
 
 async function prepareWallpaperEngineRendererCapture(sessionId, fps) {
@@ -1566,18 +1599,22 @@ function configureLocalAppPermissions() {
   ses._mineradioPermissionsConfigured = true;
   ses.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
     const origin = requestingOrigin || (details && details.requestingUrl) || (webContents && webContents.getURL && webContents.getURL()) || '';
+    if (permission === 'display-capture' && isTrustedSystemAudioCapturePermission(webContents, origin, details)) return true;
     if (permission === 'display-capture') return isTrustedWallpaperEngineDisplayCapturePermission(webContents, origin, details);
+    if (permission === 'media' && isTrustedSystemAudioCapturePermission(webContents, origin, details)) return true;
     if (permission === 'media') return isTrustedWallpaperEnginePreparationMediaPermission(webContents, origin, details);
     return LOCAL_APP_PERMISSION_ALLOWLIST.has(permission) && isLocalAppUrl(origin);
   });
   ses.setPermissionRequestHandler((webContents, permission, callback, details) => {
     const origin = (details && (details.requestingUrl || details.securityOrigin)) || (webContents && webContents.getURL && webContents.getURL()) || '';
     if (permission === 'display-capture') {
-      callback(isTrustedWallpaperEngineDisplayCapturePermission(webContents, origin, details));
+      callback(isTrustedSystemAudioCapturePermission(webContents, origin, details)
+        || isTrustedWallpaperEngineDisplayCapturePermission(webContents, origin, details));
       return;
     }
     if (permission === 'media') {
-      callback(isTrustedWallpaperEnginePreparationMediaPermission(webContents, origin, details));
+      callback(isTrustedSystemAudioCapturePermission(webContents, origin, details)
+        || isTrustedWallpaperEnginePreparationMediaPermission(webContents, origin, details));
       return;
     }
     callback(LOCAL_APP_PERMISSION_ALLOWLIST.has(permission) && isLocalAppUrl(origin));
@@ -1597,6 +1634,23 @@ function configureLocalAppPermissions() {
         && frame === mainWindow.webContents.mainFrame
         && !frame.parent
         && isLocalAppUrl(request.securityOrigin));
+      const systemAudioGrant = getSystemAudioCaptureGrant();
+      if (trustedFrame && request.audioRequested && systemAudioGrant && !systemAudioGrant.requestStarted) {
+        systemAudioGrant.requestStarted = true;
+        systemAudioGrant.expiresAt = Date.now() + 4500;
+        const sources = await desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: 1, height: 1 },
+          fetchWindowIcons: false,
+        });
+        const audioSource = sources.find((item) => String(item && item.id || '') === systemAudioGrant.sourceId)
+          || sources.find((item) => /^screen:/i.test(String(item && item.id || '')))
+          || sources[0];
+        if (audioSource) {
+          reply({ audio: 'loopback', video: request.videoRequested ? audioSource : undefined });
+          return;
+        }
+      }
       const grant = getWallpaperEngineCaptureGrant();
       if (!trustedFrame || !request.videoRequested || request.audioRequested || !grant || grant.requestStarted) {
         reply({});
@@ -3889,6 +3943,22 @@ ipcMain.handle('mineradio-system-media-current', async (_event, payload = {}) =>
     action: allowedAction,
     seekMs: payload && payload.seekMs,
   });
+});
+
+ipcMain.handle('mineradio-system-audio-capture-source', async () => {
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1, height: 1 },
+      fetchWindowIcons: false,
+    });
+    const source = sources.find(item => /^screen:/i.test(String(item && item.id || ''))) || sources[0];
+    if (!source || !source.id) return { ok: false, error: 'NO_SCREEN_CAPTURE_SOURCE' };
+    createSystemAudioCaptureGrant(source.id);
+    return { ok: true, sourceId: source.id, name: source.name || '' };
+  } catch (error) {
+    return { ok: false, error: error && error.message || 'SYSTEM_AUDIO_CAPTURE_SOURCE_FAILED' };
+  }
 });
 
 ipcMain.handle('mineradio-memory-configure-auto', async (_event, payload = {}) => {

@@ -72,6 +72,7 @@ function testWiring() {
   const home = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '03a-home-dashboard.js'), 'utf8');
   const controls = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '14-player-controls.js'), 'utf8');
   const mainLoop = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '11-main-loop.js'), 'utf8');
+  const beatRuntime = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '01-scene', '02-beat-camera-runtime.js'), 'utf8');
   const progress = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '06-lyrics', '04-progress-seek.js'), 'utf8');
   const stageLyrics = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '02-visual', '14-stage-lyrics-rendering.js'), 'utf8');
   const detailLyrics = fs.readFileSync(path.join(appRoot, 'public', 'js', 'modules', '05-playback', '06-track-detail-lyrics-actions.js'), 'utf8');
@@ -79,9 +80,15 @@ function testWiring() {
 
   assert.match(main, /require\('\.\/system-media-session'\)/);
   assert.match(main, /ipcMain\.handle\('mineradio-system-media-current'/);
+  assert.match(main, /ipcMain\.handle\('mineradio-system-audio-capture-source'/);
+  assert.match(main, /desktopCapturer\.getSources/);
+  assert.match(main, /audio: 'loopback'/);
+  assert.match(main, /function createSystemAudioCaptureGrant/);
+  assert.match(main, /function isTrustedSystemAudioCapturePermission/);
   assert.match(main, /playPause\|play\|pause\|next\|previous\|seek/);
   assert.match(main, /seekMs/);
   assert.match(preload, /getSystemMediaSession/);
+  assert.match(preload, /getSystemAudioCaptureSource/);
   assert.match(html, /id="system-media-btn"/);
   assert.match(html, /toggleSystemMediaMode\(\)/);
   assert.match(loader, /05-playback\/07-search\.js[\s\S]*05-playback\/07a-system-media-session\.js[\s\S]*05-playback\/08-audio-graph-controls\.js/);
@@ -90,6 +97,12 @@ function testWiring() {
   assert.match(renderer, /function toggleSystemMediaMode/);
   assert.match(renderer, /function systemMediaControl/);
   assert.match(renderer, /function systemMediaSeek/);
+  assert.match(renderer, /function systemMediaStartAudioCapture/);
+  assert.match(renderer, /function systemMediaStopAudioCapture/);
+  assert.match(renderer, /function systemMediaRequestAudioCaptureStream/);
+  assert.match(renderer, /getDisplayMedia/);
+  assert.match(renderer, /chromeMediaSource: 'desktop'/);
+  assert.match(renderer, /__mineradioSystemAudioCapture/);
   assert.match(renderer, /systemMediaApplySnapshot/);
   assert.match(renderer, /function systemMediaPrepareVisualSong/);
   assert.match(renderer, /systemMediaResolveVisualSong/);
@@ -101,6 +114,9 @@ function testWiring() {
   assert.match(controls, /systemMediaControl\('next'\)/);
   assert.match(controls, /systemMediaControl\('previous'\)/);
   assert.match(mainLoop, /systemMediaRenderProgress/);
+  assert.match(mainLoop, /__mineradioSystemAudioCapture/);
+  assert.match(beatRuntime, /systemMediaModeEnabled/);
+  assert.match(beatRuntime, /getPlaybackCurrentSeconds/);
   assert.match(progress, /systemMediaDisplaySeconds/);
   assert.match(progress, /systemMediaSeek/);
   assert.match(progress, /externalSystemMedia/);

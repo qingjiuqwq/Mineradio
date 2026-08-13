@@ -12,6 +12,10 @@ var systemMediaVisualResolveSeq = 0;
 var systemMediaVisualResolveCache = {};
 var systemMediaLastProgressKey = '';
 var systemMediaLastDisplaySeconds = 0;
+var systemMediaAudioCaptureStream = null;
+var systemMediaAudioCaptureSource = null;
+var systemMediaAudioCaptureStarting = false;
+var systemMediaDetachedPlaybackGraph = null;
 var SYSTEM_MEDIA_MODE_STORE_KEY = 'mineradio-system-media-mode-v1';
 var SYSTEM_MEDIA_POLL_MS = 1150;
 
@@ -68,6 +72,186 @@ function systemMediaButtonUpdate() {
   btn.setAttribute('aria-pressed', systemMediaMode ? 'true' : 'false');
   btn.title = systemMediaMode ? '停止读取系统当前播放' : '读取系统当前播放';
   document.body.classList.toggle('system-media-mode', !!systemMediaMode);
+}
+
+function systemMediaStopAudioCapture(reason) {
+  systemMediaAudioCaptureStarting = false;
+  var ownsSystemCaptureGraph = !!(systemMediaAudioCaptureSource || (source && source.__mineradioSystemAudioCapture));
+  if (systemMediaAudioCaptureSource) {
+    try { systemMediaAudioCaptureSource.disconnect(); } catch (_error) { }
+    systemMediaAudioCaptureSource = null;
+  }
+  if (ownsSystemCaptureGraph && analysisSinkNode) {
+    try { analysisSinkNode.disconnect(); } catch (_error2) { }
+    analysisSinkNode = null;
+  }
+  if (ownsSystemCaptureGraph && analyser) {
+    try { analyser.disconnect(); } catch (_error3) { }
+  }
+  if (ownsSystemCaptureGraph && beatAnalyser) {
+    try { beatAnalyser.disconnect(); } catch (_error4) { }
+  }
+  if (ownsSystemCaptureGraph) {
+    analyser = null;
+    beatAnalyser = null;
+    source = null;
+    audioSourceMedia = null;
+    audioReady = false;
+  }
+  if (systemMediaAudioCaptureStream) {
+    try {
+      systemMediaAudioCaptureStream.getTracks().forEach(function (track) { track.stop(); });
+    } catch (_error5) { }
+    systemMediaAudioCaptureStream = null;
+  }
+  if ((ownsSystemCaptureGraph || systemMediaDetachedPlaybackGraph) && !systemMediaMode) {
+    systemMediaRestoreDetachedPlaybackGraph(true, reason || 'system-media-capture-stop');
+  }
+}
+
+function systemMediaDetachPlaybackGraphForCapture() {
+  if (systemMediaDetachedPlaybackGraph) return;
+  if (!source || source.__mineradioSystemAudioCapture || audioSourceMedia !== audio) return;
+  systemMediaDetachedPlaybackGraph = {
+    source: source,
+    audioSourceMedia: audioSourceMedia
+  };
+  [source, analyser, beatAnalyser, gainNode, analysisSinkNode].forEach(function (node) {
+    if (!node) return;
+    try { node.disconnect(); } catch (_error) { }
+  });
+  source = null;
+  audioSourceMedia = null;
+  analyser = null;
+  beatAnalyser = null;
+  gainNode = null;
+  analysisSinkNode = null;
+  audioReady = false;
+}
+
+function systemMediaRestoreDetachedPlaybackGraph(reconnect, reason) {
+  var graph = systemMediaDetachedPlaybackGraph;
+  if (!graph) return false;
+  if (source && source.__mineradioSystemAudioCapture) return false;
+  source = graph.source || null;
+  audioSourceMedia = graph.audioSourceMedia || null;
+  analyser = null;
+  beatAnalyser = null;
+  gainNode = null;
+  analysisSinkNode = null;
+  audioReady = false;
+  systemMediaDetachedPlaybackGraph = null;
+  if (reconnect && audio && typeof ensurePlaybackAudioGraph === 'function') {
+    ensurePlaybackAudioGraph(reason || 'system-media-capture-stop');
+  }
+  return true;
+}
+
+async function systemMediaRequestAudioCaptureStream(sourceInfo) {
+  var sourceId = sourceInfo && sourceInfo.sourceId;
+  var lastError = null;
+  if (navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function') {
+    try {
+      return await navigator.mediaDevices.getDisplayMedia({
+        audio: true,
+        video: {
+          width: { max: 1 },
+          height: { max: 1 },
+          frameRate: { max: 1 }
+        }
+      });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!sourceId || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+    throw lastError || new Error('SYSTEM_AUDIO_CAPTURE_UNAVAILABLE');
+  }
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      mandatory: {
+        chromeMediaSource: 'desktop',
+        chromeMediaSourceId: sourceId
+      }
+    },
+    video: {
+      mandatory: {
+        chromeMediaSource: 'desktop',
+        chromeMediaSourceId: sourceId,
+        maxWidth: 1,
+        maxHeight: 1,
+        maxFrameRate: 1
+      }
+    }
+  });
+}
+
+async function systemMediaStartAudioCapture() {
+  if (!systemMediaMode || systemMediaAudioCaptureStarting || systemMediaAudioCaptureStream) return !!systemMediaAudioCaptureStream;
+  if (!navigator.mediaDevices) return false;
+  if (!window.desktopWindow || typeof window.desktopWindow.getSystemAudioCaptureSource !== 'function') return false;
+  systemMediaAudioCaptureStarting = true;
+  try {
+    var sourceInfo = await window.desktopWindow.getSystemAudioCaptureSource();
+    if (!sourceInfo || !sourceInfo.ok || !sourceInfo.sourceId) throw new Error(sourceInfo && sourceInfo.error || 'NO_SYSTEM_AUDIO_CAPTURE_SOURCE');
+    var stream = await systemMediaRequestAudioCaptureStream(sourceInfo);
+    if (!systemMediaMode) {
+      stream.getTracks().forEach(function (track) { track.stop(); });
+      return false;
+    }
+    stream.getVideoTracks().forEach(function (track) { track.stop(); });
+    if (!stream.getAudioTracks().length) {
+      stream.getTracks().forEach(function (track) { track.stop(); });
+      throw new Error('SYSTEM_AUDIO_CAPTURE_HAS_NO_AUDIO_TRACK');
+    }
+    if (!audioCtx || audioCtx.state === 'closed') {
+      var AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextCtor) throw new Error('AUDIO_CONTEXT_UNAVAILABLE');
+      audioCtx = new AudioContextCtor();
+    }
+    await resumeAudioAnalysis();
+    systemMediaStopAudioCapture('replace-system-audio-capture');
+    systemMediaDetachPlaybackGraphForCapture();
+    systemMediaAudioCaptureStream = stream;
+    source = audioCtx.createMediaStreamSource(stream);
+    source.__mineradioSystemAudioCapture = true;
+    systemMediaAudioCaptureSource = source;
+    audioSourceMedia = null;
+    analyser = audioCtx.createAnalyser();
+    beatAnalyser = audioCtx.createAnalyser();
+    analysisSinkNode = audioCtx.createGain();
+    analysisSinkNode.gain.value = 0;
+    analyser.fftSize = FFT_SIZE;
+    analyser.smoothingTimeConstant = 0.58;
+    beatAnalyser.fftSize = BEAT_FFT_SIZE;
+    beatAnalyser.smoothingTimeConstant = 0.10;
+    source.connect(analyser);
+    source.connect(beatAnalyser);
+    analyser.connect(analysisSinkNode);
+    analysisSinkNode.connect(audioCtx.destination);
+    frequencyData.fill(0);
+    timeDomainData.fill(128);
+    beatFrequencyData.fill(0);
+    beatTimeDomainData.fill(128);
+    if (typeof resetRealtimeBeatEngine === 'function') resetRealtimeBeatEngine();
+    audioReady = true;
+    return true;
+  } catch (error) {
+    console.warn('[SystemMediaAudioCapture]', error);
+    systemMediaStopAudioCapture('capture-failed');
+    return false;
+  } finally {
+    systemMediaAudioCaptureStarting = false;
+  }
+}
+
+function systemMediaEnsureAudioCapture(reason) {
+  if (!systemMediaMode || systemMediaAudioCaptureStarting || systemMediaAudioCaptureStream) return;
+  systemMediaStartAudioCapture().then(function (ok) {
+    if (!ok && reason === 'enable' && typeof showToast === 'function') {
+      showToast('系统音频震动不可用，已继续读取当前播放');
+    }
+  });
 }
 
 async function readSystemCurrentMedia(opts) {
@@ -299,6 +483,7 @@ function systemMediaApplySnapshot(snapshot) {
   systemMediaLastDisplaySeconds = systemMediaDisplaySeconds(song);
   currentLocalSong = song;
   playing = song.playbackStatus === 'playing';
+  if (playing) systemMediaEnsureAudioCapture('playing-snapshot');
   if (typeof updateControlTrackInfo === 'function') updateControlTrackInfo(song);
   if (typeof setControlCoverSrc === 'function') setControlCoverSrc(song.cover || '');
   if (typeof setPlayIcon === 'function') setPlayIcon(playing);
@@ -348,8 +533,10 @@ function setSystemMediaMode(enabled, opts) {
       try { audio.pause(); } catch (_error) { }
     }
     playToggleBusy = false;
+    systemMediaEnsureAudioCapture('enable');
     systemMediaRefresh({ toast: opts.toast !== false }).finally(function () { systemMediaSchedulePoll(260); });
   } else {
+    systemMediaStopAudioCapture('system-media-disabled');
     systemMediaLastSong = null;
     systemMediaVisualSongKey = '';
     systemMediaVisualResolveSeq++;

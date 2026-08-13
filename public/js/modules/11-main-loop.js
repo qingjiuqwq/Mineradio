@@ -362,7 +362,8 @@ function animate() {
     ? getSonicAudioMonitorSnapshot().frame
     : null;
   if (audioStepDt > 0) {
-  if (analyser && playing && audio && !audio.paused) {
+  var externalSystemAudio = typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled() && source && source.__mineradioSystemAudioCapture;
+  if (analyser && playing && ((audio && !audio.paused) || externalSystemAudio)) {
     if (audioCtx && audioCtx.state === 'suspended') resumeAudioAnalysis();
     analyser.getByteFrequencyData(frequencyData);
     analyser.getByteTimeDomainData(timeDomainData);
@@ -411,7 +412,8 @@ function animate() {
     var realtimeBeat = processRealtimeBeatEngine(audioStepDt);
     if (realtimeBeat && realtimeBeat.hit) {
       var dj = djMode.active;
-      var djMapCoversCurrentTime = !dj || !currentDjBeatMap || !currentDjBeatMap.partialUntilSec || !audio || (audio.currentTime || 0) <= currentDjBeatMap.partialUntilSec - 1.25;
+      var playbackNowSeconds = typeof getPlaybackCurrentSeconds === 'function' ? getPlaybackCurrentSeconds() : (audio && audio.currentTime || 0);
+      var djMapCoversCurrentTime = !dj || !currentDjBeatMap || !currentDjBeatMap.partialUntilSec || playbackNowSeconds <= currentDjBeatMap.partialUntilSec - 1.25;
       var djBeatMapReadyForCamera = dj && currentDjBeatMap && currentDjBeatMap.cameraBeats && currentDjBeatMap.cameraBeats.length >= 4 && djMapCoversCurrentTime;
       var beatMapReadyForCamera = dj ? djBeatMapReadyForCamera : (currentBeatMap && currentBeatMap.cameraBeats && currentBeatMap.cameraBeats.length >= 4);
       var waitingForBeatMap = dj ? !djBeatMapReadyForCamera : (!beatMapReadyForCamera && (!!beatMapBusy || !!beatAnalysisTimer || ((audio && audio.currentTime) || 0) < 18));
@@ -474,7 +476,7 @@ function animate() {
         beat: beatPulse,
         sampleRate: analysisSampleRate,
         fftSize: analysisFftSize,
-        currentTime: audio.currentTime || 0
+        currentTime: typeof getPlaybackCurrentSeconds === 'function' ? getPlaybackCurrentSeconds() : (audio && audio.currentTime || 0)
       });
       if (fx && fx.sonicAudioMonitorEnabled !== false) sonicAudioFrame = sonicMonitorFrame;
     }

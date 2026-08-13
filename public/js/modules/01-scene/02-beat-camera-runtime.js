@@ -36,7 +36,9 @@ function primeCinemaAfterTrackStart(reason) {
   if (!fx || !fx.cinema || !beatCam) return;
   var shake = clampRange(Number(fx.cinemaShake) || 0, 0, 1.8);
   if (shake <= 0.001) return;
-  var currentT = audio && isFinite(audio.currentTime) ? audio.currentTime : 0;
+  var currentT = typeof getPlaybackCurrentSeconds === 'function'
+    ? getPlaybackCurrentSeconds()
+    : (audio && isFinite(audio.currentTime) ? audio.currentTime : 0);
   cinemaDynamics.scale = Math.max(cinemaDynamics.scale || 0, 0.92);
   beatCam.lastTriggerAt = Math.min(beatCam.lastTriggerAt || -10, currentT - 0.48);
   beatCam.punch = Math.max(beatCam.punch || 0, 0.16);
@@ -236,7 +238,10 @@ function resetRealtimeBeatEngine() {
   rtBeat.tempoConfidence = 0;
   rtBeat.beatCount = 0;
   rtBeat.primedFrames = 0;
-  rtBeat.warmupUntil = (audio && isFinite(audio.currentTime) ? audio.currentTime : 0) + (djMode.active ? 0.24 : 0.48);
+  var currentSeconds = typeof getPlaybackCurrentSeconds === 'function'
+    ? getPlaybackCurrentSeconds()
+    : (audio && isFinite(audio.currentTime) ? audio.currentTime : 0);
+  rtBeat.warmupUntil = currentSeconds + (djMode.active ? 0.24 : 0.48);
   rtBeat.pulse = 0;
   rtBeat.score = 0;
   rtBeat.stats.hits = 0;
@@ -390,7 +395,8 @@ function beatBandRms(data, sampleRate, fftSize, hz0, hz1) {
 }
 
 function processRealtimeBeatEngine(dt) {
-  if (!beatAnalyser || !audioCtx || !audio || audio.paused) return null;
+  var externalSystemMedia = typeof systemMediaModeEnabled === 'function' && systemMediaModeEnabled();
+  if (!beatAnalyser || !audioCtx || (!externalSystemMedia && (!audio || audio.paused))) return null;
   dt = Math.max(0.001, Math.min(0.080, dt || 0.016));
   var dj = djMode.active;
   beatAnalyser.getByteFrequencyData(beatFrequencyData);
@@ -462,7 +468,7 @@ function processRealtimeBeatEngine(dt) {
   var bodyNorm = clamp01(body / Math.max(0.045, rtBeat.bodyPeak * (dj ? 0.74 : 0.72)));
   var vocalNorm = clamp01(vocal / Math.max(0.045, rtBeat.vocalPeak * 0.72));
   var snapNorm = clamp01(snap / Math.max(0.040, rtBeat.snapPeak * (dj ? 0.78 : 0.72)));
-  var nowT = audio.currentTime || 0;
+  var nowT = typeof getPlaybackCurrentSeconds === 'function' ? getPlaybackCurrentSeconds() : (audio && audio.currentTime || 0);
   rtBeat.primedFrames++;
   var warmingUp = nowT < rtBeat.warmupUntil || rtBeat.primedFrames < (dj ? 5 : 10);
   var gapFromLast = nowT - rtBeat.lastHitAt;
