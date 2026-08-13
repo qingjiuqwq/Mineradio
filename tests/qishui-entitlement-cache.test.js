@@ -126,6 +126,86 @@ async function testAmbiguousTrackBlockFallsBackToVerifiedMe() {
   assert.strictEqual(meRequests, 1, 'ambiguous track membership must fall back to one account /me verification');
 }
 
+async function testTrackV2UrlPlayerInfoIsPrimaryPlaybackSource() {
+  const cookie = 'sessionid=track-v2-session; sid_tt=track-v2-sid; uid_tt=track-v2-user';
+  const mediaUrl = 'https://media.example/qishui-track-v2-full.m4a';
+  let trackV2Requests = 0;
+  let playerInfoRequests = 0;
+  let h5Requests = 0;
+  await withHttpsMock(({ url, options }) => {
+    const parsed = new URL(url);
+    if (parsed.pathname === '/luna/pc/me') {
+      return {
+        body: {
+          data: {
+            my_info: { user_id: 'track-v2-user', nickname: 'Track V2 VIP' },
+            vip_info: {
+              status: 1,
+              vip_end_time: Math.floor((Date.now() + 60 * 60 * 1000) / 1000),
+            },
+          },
+        },
+      };
+    }
+    if (parsed.hostname === 'api.qishui.com' && parsed.pathname === '/luna/pc/track_v2') {
+      trackV2Requests += 1;
+      assert.strictEqual(options.method, 'POST');
+      assert.strictEqual(options.headers['User-Agent'], 'LunaPC/3.5.1(408871041)');
+      assert.strictEqual(parsed.searchParams.get('version_name'), '3.5.1');
+      assert.strictEqual(parsed.searchParams.get('version_code'), '30050100');
+      assert.strictEqual(parsed.searchParams.get('channel'), 'official');
+      return {
+        body: {
+          track: {
+            base_info: { id: 'track-v2-primary', name: 'Track V2 Full', duration_ms: 181000 },
+            related_info: { artist_links: [{ id: 'artist-v2', name: 'Track V2 Artist' }] },
+          },
+          track_player: {
+            url_player_info: 'https://play.example/player-info',
+          },
+        },
+      };
+    }
+    if (parsed.hostname === 'play.example' && parsed.pathname === '/player-info') {
+      playerInfoRequests += 1;
+      assert.strictEqual(options.headers['User-Agent'], 'LunaPC/3.5.1(408871041)');
+      return {
+        body: {
+          Result: {
+            Data: {
+              PlayInfoList: [{
+                MainPlayUrl: mediaUrl,
+                PlayAuth: 'track-v2-play-auth',
+                Bitrate: 320000,
+                Format: 'm4a',
+                Quality: 'lossless',
+                Duration: 181,
+              }],
+            },
+          },
+        },
+      };
+    }
+    if (parsed.hostname === 'beta-luna.douyin.com') {
+      h5Requests += 1;
+      return { body: h5TrackPayload('track-v2-primary', 'https://media.example/h5-trial.m4a') };
+    }
+    throw new Error('Unexpected request: ' + parsed.hostname + parsed.pathname);
+  }, async () => {
+    const result = await qishui.handleQishuiSongUrl({ id: 'track-v2-primary', quality: 'lossless' }, cookie);
+    assert.strictEqual(result.playable, true);
+    assert.strictEqual(result.source, 'qishui-pc-track-v2-url-player-info');
+    assert.ok(result.url.startsWith(mediaUrl));
+    assert.match(result.url, /#auth=track-v2-play-auth$/);
+    assert.strictEqual(result.title, 'Track V2 Full');
+    assert.strictEqual(result.artist, 'Track V2 Artist');
+    assert.strictEqual(result.isVip, true);
+  });
+  assert.strictEqual(trackV2Requests, 1, 'track_v2 must be the primary playback request');
+  assert.strictEqual(playerInfoRequests, 1, 'url_player_info must be resolved exactly once');
+  assert.strictEqual(h5Requests, 0, 'H5 must not be used when PC playback succeeds');
+}
+
 async function testTrackMetadataCacheIsAccountScopedAndReusable() {
   const cookie = 'sessionid=metadata-cache-session; sid_tt=metadata-cache-sid; uid_tt=metadata-cache-user';
   const otherCookie = 'sessionid=metadata-cache-session-b; sid_tt=metadata-cache-sid-b; uid_tt=metadata-cache-user-b';
@@ -178,6 +258,7 @@ async function testTrackMetadataCacheIsAccountScopedAndReusable() {
 async function main() {
   testMembershipSourceAndExpiryAggregation();
   await testAmbiguousTrackBlockFallsBackToVerifiedMe();
+  await testTrackV2UrlPlayerInfoIsPrimaryPlaybackSource();
   await testTrackMetadataCacheIsAccountScopedAndReusable();
   console.log('[OK] Qishui account membership, expiry TTL, and account-scoped metadata cache verified.');
 }

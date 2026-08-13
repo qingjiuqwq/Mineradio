@@ -142,6 +142,8 @@ function playbackQualityRuntimeCapForSong(song, provider) {
   return key && playbackQualityRuntimeCaps ? playbackQualityRuntimeCaps[key] || null : null;
 }
 function playbackQualityCapValue(song, provider) {
+  provider = normalizePlaybackProvider(provider || songProviderKey(song));
+  if (provider === 'netease') return '';
   var cap = playbackQualityRuntimeCapForSong(song, provider);
   return cap && cap.ceiling ? normalizePlaybackQualityForProvider(cap.ceiling, provider) : '';
 }

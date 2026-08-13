@@ -30,7 +30,7 @@ const QISHUI_PUBLIC_HEADERS = {
   'User-Agent': 'Mineradio/2.1.0 (Qishui public catalog bridge)',
 };
 const QISHUI_WEB_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) SodaMusic/3.1.0 Chrome/136.0.7103.59 Electron/36.4.0-rs.22.release.main.1 TTElectron/36.4.0-rs.22.release.main.1 Safari/537.36';
-const QISHUI_PC_APP_UA = 'LunaPC/3.3.0(359450208)';
+const QISHUI_PC_APP_UA = process.env.QISHUI_PC_APP_UA || 'LunaPC/3.5.1(408871041)';
 const QISHUI_WEB_DEFAULT_PARAMS = {
   aid: '386088',
   app_name: 'luna_pc',
@@ -285,6 +285,42 @@ function qishuiPcUrl(apiPath, params) {
     ? apiPath
     : (QISHUI_WEB_PC_API_BASE + apiPath);
   return urlWithParams(target, params || {});
+}
+
+function qishuiQrLoginConfigFile() {
+  return process.env.QISHUI_QR_CONFIG_FILE || path.join(__dirname, '.qishui-qr-login.json');
+}
+
+let qishuiQrLoginConfigCache = { file: '', mtimeMs: -1, value: null };
+function readQishuiQrLoginConfig() {
+  const file = qishuiQrLoginConfigFile();
+  try {
+    const stat = fs.statSync(file);
+    if (qishuiQrLoginConfigCache.file === file && qishuiQrLoginConfigCache.mtimeMs === stat.mtimeMs) {
+      return qishuiQrLoginConfigCache.value || {};
+    }
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+    const value = parsed && typeof parsed === 'object' ? parsed : {};
+    qishuiQrLoginConfigCache = { file, mtimeMs: stat.mtimeMs, value };
+    return value;
+  } catch (_) {
+    qishuiQrLoginConfigCache = { file, mtimeMs: -1, value: null };
+    return {};
+  }
+}
+
+function qishuiPlaybackCredential(name, aliases) {
+  const envKeys = [name].concat(aliases || []);
+  for (const key of envKeys) {
+    const value = normalizeText(process.env[key] || '');
+    if (value) return value;
+  }
+  const config = readQishuiQrLoginConfig();
+  for (const key of aliases || []) {
+    const value = normalizeText(config[key] || config[key.charAt(0).toLowerCase() + key.slice(1)] || '');
+    if (value) return value;
+  }
+  return '';
 }
 
 function qishuiSessionCookieHeader(cookieText) {
@@ -1601,7 +1637,9 @@ function qishuiWebCommonParams(extra, opts) {
 
 function qishuiPcAppParams(extra) {
   const now = Date.now();
-  const deviceId = String(now);
+  const deviceId = qishuiPlaybackCredential('QISHUI_DEVICE_ID', ['DEVICE_ID', 'deviceId']) || String(now);
+  const installId = qishuiPlaybackCredential('QISHUI_INSTALL_ID', ['QISHUI_IID', 'INSTALL_ID', 'IID', 'installId']) || String(now + 1);
+  const fp = qishuiPlaybackCredential('QISHUI_FP', ['FP', 'deviceId', 'DEVICE_ID']) || deviceId;
   return Object.assign({
     aid: '386088',
     app_name: 'luna_pc',
@@ -1611,9 +1649,9 @@ function qishuiPcAppParams(extra) {
     sim_region: '',
     device_id: deviceId,
     cdid: '',
-    iid: String(now + 1),
-    version_name: '3.3.0',
-    version_code: '30030000',
+    iid: installId,
+    version_name: '3.5.1',
+    version_code: '30050100',
     channel: 'official',
     build_mode: 'master',
     network_carrier: '',
@@ -1622,8 +1660,8 @@ function qishuiPcAppParams(extra) {
     resolution: '',
     device_platform: 'windows',
     device_type: 'Windows',
-    os_version: 'Windows 11',
-    fp: deviceId,
+    os_version: 'Windows 11 Pro',
+    fp,
   }, extra || {});
 }
 
@@ -1638,6 +1676,10 @@ function qishuiWebHeaders(cookieText, opts) {
     headers['x-luna-background-type'] = 'foreground';
     headers['x-luna-is-background-req'] = '0';
     headers['x-luna-is-local-user'] = '1';
+    const xHelios = qishuiPlaybackCredential('QISHUI_X_HELIOS', ['X_HELIOS', 'xHelios']);
+    const xMedusa = qishuiPlaybackCredential('QISHUI_X_MEDUSA', ['X_MEDUSA', 'xMedusa']);
+    if (xHelios) headers['x-helios'] = xHelios;
+    if (xMedusa) headers['x-medusa'] = xMedusa;
   }
   if (cookie) headers.Cookie = cookie;
   return headers;
@@ -3125,22 +3167,30 @@ async function handleQishuiLyric(id, cookieText) {
   if (cached) return cached;
   const errors = [];
   try {
-    const seoPayload = await fetchQishuiSeoTrack(id);
-    const lyrics = extractQishuiLyrics(seoPayload);
-    const cachedSeo = cacheQishuiLyric(id, lyrics.lyric, lyrics.tlyric, 'qishui-beta-seo-track');
-    if (cachedSeo) return cachedSeo;
+    const h5Payload = await fetchQishuiH5SeoTrack(id, cookieText);
+    const lyrics = extractQishuiLyrics(h5Payload);
+    const cachedH5 = cacheQishuiLyric(id, lyrics.lyric, lyrics.tlyric, 'qishui-h5-seo-track');
+    if (cachedH5) return cachedH5;
   } catch (err) {
-    errors.push('seo:' + (err && err.message || String(err)));
+    errors.push('h5:' + (err && err.message || String(err)));
   }
   if (qishuiCookieHasLogin(normalizeQishuiCookieInput(cookieText))) {
     try {
-      const trackPayload = await fetchQishuiPcTrackV2Get(id, cookieText);
+      const trackPayload = await fetchQishuiPcTrackV2(id, cookieText);
       const lyrics = extractQishuiLyrics(trackPayload);
       const cachedTrack = cacheQishuiLyric(id, lyrics.lyric, lyrics.tlyric, 'qishui-pc-track-v2');
       if (cachedTrack) return cachedTrack;
     } catch (err) {
       errors.push('track-v2:' + (err && err.message || String(err)));
     }
+  }
+  try {
+    const seoPayload = await fetchQishuiSeoTrack(id);
+    const lyrics = extractQishuiLyrics(seoPayload);
+    const cachedSeo = cacheQishuiLyric(id, lyrics.lyric, lyrics.tlyric, 'qishui-beta-seo-track');
+    if (cachedSeo) return cachedSeo;
+  } catch (err) {
+    errors.push('seo:' + (err && err.message || String(err)));
   }
   if (QISHUI_PUBLIC_ENABLED) {
     try {
@@ -3280,8 +3330,22 @@ function parseQishuiH5TrackPlayer(data) {
   return { audioUrl, spadeA, mainUrl, backupUrl, videoModel, playInfo };
 }
 
+function qishuiH5TrialInfo(trackDuration, playerDuration, url) {
+  trackDuration = qishuiNormalizeDurationSeconds(trackDuration);
+  playerDuration = qishuiNormalizeDurationSeconds(playerDuration);
+  let trial = false;
+  if (trackDuration > 45 && playerDuration > 0 && playerDuration < Math.max(35, trackDuration - 20)) {
+    trial = true;
+  }
+  const text = normalizeText(url).toLowerCase();
+  if (/trial|preview|audition|clip/.test(text)) trial = true;
+  return { trial, trackDuration, playerDuration };
+}
+
 async function fetchQishuiH5SongUrl(trackId, cookieText) {
   const data = await fetchQishuiH5SeoTrack(trackId, cookieText);
+  const h5Lyrics = extractQishuiLyrics(data);
+  cacheQishuiLyric(trackId, h5Lyrics.lyric, h5Lyrics.tlyric, 'qishui-h5-seo-track');
   const seoTrack = (data && data.seo_track) || (data && data.SeoTrack) || {};
   const track = seoTrack.track || seoTrack.Track || {};
   const player = parseQishuiH5TrackPlayer(data);
@@ -3294,6 +3358,11 @@ async function fetchQishuiH5SongUrl(trackId, cookieText) {
     qishuiObjectString(track, ['duration_ms', 'duration', 'Duration', 'dur_ms', 'durMs'])
     || qishuiObjectNumber(player.videoModel, ['video_duration', 'duration', 'Duration'])
   );
+  const playerDuration = qishuiNormalizeDurationSeconds(
+    qishuiObjectNumber(player.playInfo, ['duration', 'Duration', 'video_duration', 'VideoDuration'])
+    || qishuiObjectNumber(player.videoModel, ['video_duration', 'duration', 'Duration'])
+  );
+  const trialInfo = qishuiH5TrialInfo(duration, playerDuration, player.audioUrl);
   const trackName = normalizeText(track.name || track.title || '');
   const artistList = Array.isArray(track.artists) ? track.artists : [];
   const artistName = artistList.map(a => a.name || a.nickname || '').filter(Boolean).join(', ');
@@ -3305,17 +3374,18 @@ async function fetchQishuiH5SongUrl(trackId, cookieText) {
     playbackMode: 'direct-url',
     url: qishuiUrlWithAuth(player.audioUrl, player.spadeA),
     playable: true,
-    trial: false,
+    trial: trialInfo.trial,
     loggedIn: true,
     playbackKeyReady: true,
-    membershipKnown: true,
-    isVip: true,
+    membershipKnown: false,
+    isVip: false,
     isSvip: false,
-    vipLabel: 'VIP',
+    vipLabel: '未知会员状态',
     level,
     quality,
     br: qishuiBitrateForUi(bitrate),
     duration,
+    playerDuration,
     source: 'qishui-h5-seo-track',
     encrypted: !!player.spadeA,
     title: trackName,
@@ -3330,7 +3400,7 @@ async function fetchQishuiPlayerInfo(playerInfoUrl, cookieText, membership) {
     timeoutMs: 10000,
     headers: {
       'Accept': 'application/json, text/plain, */*',
-      'User-Agent': 'LunaPC/3.4.0(388267242)',
+      'User-Agent': QISHUI_PC_APP_UA,
     },
   });
   const result = pickObject(json && json.Result, json && json.result);
@@ -3395,6 +3465,97 @@ async function resolveQishuiDownloadInfo(trackId, payload, cookieText, membershi
   return Object.assign(collected, { best });
 }
 
+function qishuiTrackV2MediaInfo(track, stream) {
+  track = track && typeof track === 'object' ? track : {};
+  stream = stream && typeof stream === 'object' ? stream : {};
+  const base = pickObject(track.base_info, track.baseInfo, track);
+  const display = pickObject(track.display_info, track.displayInfo);
+  const related = pickObject(track.related_info, track.relatedInfo);
+  const artists = qishuiArtists(related, base, display, track, track);
+  return {
+    title: normalizeText(base.name || base.title || track.name || track.title || ''),
+    artist: artists.map(a => a.name).filter(Boolean).join(', '),
+    duration: qishuiNormalizeDurationSeconds(
+      stream.duration ||
+      base.duration_ms ||
+      base.duration ||
+      track.duration_ms ||
+      track.duration ||
+      0
+    ),
+  };
+}
+
+function qishuiMembershipResponseFields(membership) {
+  membership = membership && typeof membership === 'object' ? membership : {};
+  return {
+    membershipKnown: !!membership.membershipKnown,
+    vipType: membership.vipType || 0,
+    vipLevel: membership.vipLevel || 'none',
+    isVip: !!membership.isVip,
+    isSvip: !!membership.isSvip,
+    vipLabel: membership.vipLabel || (membership.isVip ? 'VIP' : '鏃燰IP'),
+  };
+}
+
+function qishuiUnavailableForRequiredTier(requiredTier, membership, messagePrefix) {
+  requiredTier = qishuiNormalizeRequiredTier(requiredTier);
+  const category = requiredTier === 'svip' ? 'svip_required' : 'vip_required';
+  const message = messagePrefix || (requiredTier === 'svip'
+    ? 'Qishui track requires SVIP playback rights'
+    : 'Qishui track requires VIP playback rights');
+  return qishuiUnavailable(message, category, {
+    loggedIn: true,
+    playbackKeyReady: false,
+    requiredTier,
+    ...qishuiMembershipResponseFields(membership),
+  });
+}
+
+function qishuiFormatPcSongUrl(trackId, resolved, membership, requestedQuality) {
+  const best = resolved && resolved.best;
+  if (!(best && best.url)) {
+    const err = new Error('QISHUI_AUDIO_SOURCE_EMPTY');
+    err.code = 'QISHUI_AUDIO_SOURCE_EMPTY';
+    throw err;
+  }
+  const requiredTier = qishuiStreamRequiredTier(best);
+  if (resolved.entitlementLimited && membership && membership.membershipKnown && !qishuiRequiredTierAllowed(requiredTier, membership)) {
+    const err = new Error(requiredTier === 'svip' ? 'QISHUI_SVIP_REQUIRED' : 'QISHUI_VIP_REQUIRED');
+    err.code = err.message;
+    err.requiredTier = requiredTier;
+    throw err;
+  }
+  const meta = qishuiTrackV2MediaInfo(resolved.track, best);
+  const bitrate = qishuiNormalizeBitrateKbps(best.bitrate);
+  return {
+    provider: 'qishui',
+    playbackMode: 'direct-url',
+    url: qishuiUrlWithAuth(best.url, best.auth),
+    playable: true,
+    trial: false,
+    loggedIn: true,
+    playbackKeyReady: true,
+    source: 'qishui-pc-track-v2-url-player-info',
+    encrypted: !!best.auth,
+    requiredTier,
+    requestedQuality,
+    level: qishuiPlaybackLevel(best.quality, best.format, bitrate),
+    quality: best.quality || '',
+    format: best.format || '',
+    br: qishuiBitrateForUi(bitrate),
+    duration: meta.duration,
+    title: meta.title,
+    artist: meta.artist,
+    ...qishuiMembershipResponseFields(membership),
+  };
+}
+
+function qishuiTrackRestrictionRequiredTier(payload) {
+  const restriction = qishuiTrackPlaybackRestriction(qishuiPrimaryTrackFromV2(payload) || payload);
+  return restriction && restriction.requiredTier || 'free';
+}
+
 function qishuiUrlWithAuth(url, auth) {
   url = normalizeText(url);
   auth = normalizeText(auth);
@@ -3414,6 +3575,7 @@ async function handleQishuiSongUrl(opts, cookieText) {
     });
   }
   const requestedQuality = normalizeText(opts.quality || '');
+  const allowH5Fallback = opts.h5Fallback !== false && opts.allowH5Fallback !== false;
 
   // Get membership info for VIP/SVIP marking
   let membership = { membershipKnown: false, isVip: false, isSvip: false, vipLabel: '无VIP', vipType: 0, vipLevel: 'none' };
@@ -3422,14 +3584,43 @@ async function handleQishuiSongUrl(opts, cookieText) {
   } catch (_) {
     // membership check failed, continue without VIP/SVIP marking
   }
+  let pcPlaybackError = '';
 
-  // H5 seo track is the primary and only audio source
+  try {
+    const trackPayload = await fetchQishuiPcTrackV2(id, cookie);
+    const trackMembership = qishuiPlaybackMembershipFromPayload(trackPayload);
+    if (!(membership && membership.membershipKnown) && trackMembership && trackMembership.membershipKnown) {
+      membership = trackMembership;
+    }
+    const trackRequiredTier = qishuiTrackRestrictionRequiredTier(trackPayload);
+    if (trackRequiredTier !== 'free' && membership && membership.membershipKnown && !qishuiRequiredTierAllowed(trackRequiredTier, membership)) {
+      return qishuiUnavailableForRequiredTier(trackRequiredTier, membership);
+    }
+    const lyrics = extractQishuiLyrics(trackPayload);
+    cacheQishuiLyric(id, lyrics.lyric, lyrics.tlyric, 'qishui-pc-track-v2');
+    const resolved = await resolveQishuiDownloadInfo(id, trackPayload, cookie, membership);
+    return qishuiFormatPcSongUrl(id, resolved, membership, requestedQuality);
+  } catch (err) {
+    pcPlaybackError = err && err.message || String(err);
+  }
+
+  if (!allowH5Fallback) {
+    return qishuiUnavailable('Qishui PC playback did not return a playable audio source: ' + pcPlaybackError, 'source_unavailable', {
+      loggedIn: true,
+      playbackKeyReady: false,
+      ...qishuiMembershipResponseFields(membership),
+      rawError: pcPlaybackError,
+    });
+  }
+
+  // H5 seo track remains a fallback when PC playback credentials are missing or expired.
   try {
     const h5Result = await fetchQishuiH5SongUrl(id, cookie);
     if (h5Result && h5Result.playable && h5Result.url) {
       return {
         ...h5Result,
         loggedIn: true,
+        trial: !!h5Result.trial,
         membershipKnown: !!membership.membershipKnown,
         vipType: membership.vipType || 0,
         vipLevel: membership.vipLevel || 'none',
@@ -3437,6 +3628,8 @@ async function handleQishuiSongUrl(opts, cookieText) {
         isSvip: !!membership.isSvip,
         vipLabel: membership.vipLabel || (membership.isVip ? 'VIP' : '无VIP'),
         requestedQuality,
+        fallbackFrom: 'qishui-pc-track-v2',
+        fallbackError: pcPlaybackError,
       };
     }
   } catch (err) {

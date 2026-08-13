@@ -136,6 +136,7 @@ async function testTrackV2GetFallbackAndBitratePriority() {
     assert.ok(result.url.startsWith('https://media.example/audio.m4a?br=128000'));
     assert.strictEqual(result.br, 128000);
     assert.strictEqual(result.level, 'standard');
+    assert.strictEqual(result.trial, false);
   });
 
   await withHttpsMock(({ url, options }) => {
@@ -162,6 +163,71 @@ async function testTrackV2GetFallbackAndBitratePriority() {
   }, async () => {
     const result = await qishui.handleQishuiSongUrl({ id: 'track-priority' }, cookie);
     assert.ok(result.url.startsWith('https://media.example/primary.m4a?br=128000'), 'bit_rates playable_url must remain a last-resort source');
+    assert.strictEqual(result.trial, false);
+  });
+}
+
+async function testH5FallbackOnlyMarksRealPreviewAsTrial() {
+  const cookie = 'sessionid=h5-trial-session; sid_tt=h5-trial-sid';
+  await withHttpsMock(({ url }) => {
+    const parsed = new URL(url);
+    if (parsed.hostname === 'beta-luna.douyin.com') {
+      return {
+        body: {
+          seo_track: { track: { id: 'h5-full-free', name: 'H5 Full Free', duration_ms: 180000, artists: [{ name: 'Artist' }] } },
+          lyric: { content: '[1000,1000]<0,1000,0>缓存歌词' },
+          track_player: {
+            video_model: JSON.stringify({
+              video_list: [{
+                main_url: 'https://media.example/full-free.m4a?br=128000',
+                duration: 180,
+                bitrate: 128000,
+                quality: 'standard',
+              }],
+            }),
+          },
+        },
+      };
+    }
+    throw new Error('Unexpected request: ' + parsed.hostname + parsed.pathname);
+  }, async () => {
+    const result = await qishui.handleQishuiSongUrl({ id: 'h5-full-free' }, cookie);
+    assert.strictEqual(result.playable, true);
+    assert.strictEqual(result.source, 'qishui-h5-seo-track');
+    assert.strictEqual(result.trial, false, 'full-length H5 audio must not trigger VIP/SVIP trial UI');
+    assert.strictEqual(result.duration, 180);
+    assert.strictEqual(result.playerDuration, 180);
+    const lyric = await qishui.handleQishuiLyric('h5-full-free', cookie);
+    assert.strictEqual(lyric.source, 'qishui-h5-seo-track');
+    assert.strictEqual(lyric.lyric, '[00:01.00]缓存歌词');
+  });
+
+  await withHttpsMock(({ url }) => {
+    const parsed = new URL(url);
+    if (parsed.hostname === 'beta-luna.douyin.com') {
+      return {
+        body: {
+          seo_track: { track: { id: 'h5-preview-only', name: 'H5 Preview Only', duration_ms: 180000, artists: [{ name: 'Artist' }] } },
+          track_player: {
+            video_model: JSON.stringify({
+              video_list: [{
+                main_url: 'https://media.example/preview-only.m4a?br=128000',
+                duration: 30,
+                bitrate: 128000,
+                quality: 'standard',
+              }],
+            }),
+          },
+        },
+      };
+    }
+    throw new Error('Unexpected request: ' + parsed.hostname + parsed.pathname);
+  }, async () => {
+    const result = await qishui.handleQishuiSongUrl({ id: 'h5-preview-only' }, cookie);
+    assert.strictEqual(result.playable, true);
+    assert.strictEqual(result.trial, true, 'short H5 audio must still be surfaced as a real preview');
+    assert.strictEqual(result.duration, 180);
+    assert.strictEqual(result.playerDuration, 30);
   });
 }
 
@@ -172,9 +238,10 @@ async function testLyricFallbackAndConversion() {
   assert.strictEqual(converted.lyric, '[00:01.00]世界\n[00:04.00]和平');
   assert.strictEqual(converted.yrc, '[1000,2000](1000,500,0)世(1500,500,0)界\n[4000,1000](4000,1000,0)和平');
 
-  await withHttpsMock(({ url }) => {
+  await withHttpsMock(({ url, options }) => {
     const parsed = new URL(url);
     if (parsed.hostname === 'beta-luna.douyin.com') {
+      assert(/sessionid=fixture-session/.test(String(options.headers && options.headers.Cookie || '')));
       return {
         body: {
           data: {
@@ -187,8 +254,8 @@ async function testLyricFallbackAndConversion() {
     }
     throw new Error('Unexpected request: ' + parsed.hostname + parsed.pathname);
   }, async () => {
-    const result = await qishui.handleQishuiLyric('lyric-beta-fixture');
-    assert.strictEqual(result.source, 'qishui-beta-seo-track');
+    const result = await qishui.handleQishuiLyric('lyric-beta-fixture', 'sessionid=fixture-session');
+    assert.strictEqual(result.source, 'qishui-h5-seo-track');
     assert.strictEqual(result.lyric, '[00:02.00]汽水');
     assert.strictEqual(result.yrc, '[2000,1200](2000,600,0)汽(2600,600,0)水');
   });
@@ -335,6 +402,7 @@ async function run() {
   assert(source.includes("'/api/luna/v1/platform/feed/song-tab/'"));
   await testPcSearchAndPublicFallback();
   await testTrackV2GetFallbackAndBitratePriority();
+  await testH5FallbackOnlyMarksRealPreviewAsTrial();
   await testLyricFallbackAndConversion();
   await testPcAccountWritesAndComments();
   console.log('[OK] Qishui local PC search, playback fallback, lyrics, collections, recent-play, and comments verified.');
